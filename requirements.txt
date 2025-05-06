@@ -1,0 +1,7 @@
+opencv-python
+ultralytics
+deep_sort_realtime
+deepface
+tf-keras          # if you ran into the tf-keras error
+pymongo
+numpy
