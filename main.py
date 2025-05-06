@@ -1,4 +1,3 @@
-#main.py
 import cv2
 from detector import init_detector, detect_people
 from tracker import init_tracker, update_tracks
@@ -8,11 +7,9 @@ from age_estimator import estimate_age
 from database import get_customer_by_name, add_customer, update_customer
 from utils import save_image, get_timestamp
 
-# seconds of absence before counting a return visit
 SESSION_TIMEOUT = 10
-
-# map Deep SORT track IDs → assigned person name
 track_name_map = {}
+track_age_map = {}  # NEW: stores estimated age per track
 
 def main():
     model = init_detector()
@@ -25,15 +22,12 @@ def main():
         if not ret:
             break
 
-        # 1) Detect & 2) Track
         boxes, scores, resized = detect_people(model, frame)
         tracks = update_tracks(tracker, boxes, scores, resized)
 
         for track in tracks:
             tid = track.track_id
             x1, y1, x2, y2 = map(int, track.to_ltrb())
-
-            # safe bounding-box crop
             h, w, _ = resized.shape
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
@@ -41,34 +35,27 @@ def main():
                 continue
             crop = resized[y1:y2, x1:x2]
 
-            # 3) Face recognition
             name, emb, face_found = recognize_face(crop)
 
             if tid in track_name_map:
-                # reuse existing identity for this track
                 name = track_name_map[tid]
             else:
-                # first valid face for this track
                 if face_found and emb is not None:
-                    # if no match, create new name
                     if name is None:
                         name = f"Person_{len(known_names) + 1}"
-                    # register globally
                     known_names.append(name)
                     known_embeddings.append(emb)
                     track_name_map[tid] = name
                 else:
-                    # no face yet: skip until we get one
                     continue
 
-            # 4) Age estimation
-            age = estimate_age(crop)
+            if tid not in track_age_map:
+                track_age_map[tid] = estimate_age(crop)
+            age = track_age_map[tid]
 
-            # 5) Database insert/update
             now = get_timestamp()
             customer = get_customer_by_name(name)
             if not customer:
-                # first-ever visit
                 data = {
                     "name": name,
                     "track_id": tid,
@@ -76,7 +63,8 @@ def main():
                     "last_seen": now,
                     "visit_count": 1,
                     "total_time": 0,
-                    "age": age,
+                    "min_age": age,
+                    "max_age": age,
                     "image_path": save_image(crop, name)
                 }
                 add_customer(data)
@@ -88,12 +76,12 @@ def main():
                     "last_seen": now,
                     "visit_count": visits,
                     "total_time": total_time,
-                    "age": age
+                    "min_age": min(customer.get("min_age", age), age),
+                    "max_age": max(customer.get("max_age", age), age)
                 })
 
-            # 6) Draw bounding box & label
+            label = f"{name} | Age: {customer.get('min_age', age)}-{customer.get('max_age', age)}"
             cv2.rectangle(resized, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"{name} | Age: {age}"
             cv2.putText(resized, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
