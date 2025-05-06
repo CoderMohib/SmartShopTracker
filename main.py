@@ -2,14 +2,14 @@ import cv2
 from detector import init_detector, detect_people
 from tracker import init_tracker, update_tracks
 from recognizer import recognize_face, known_embeddings, known_names
-
-from age_estimator import estimate_age
+from analyzer import analyze_face
 from database import get_customer_by_name, add_customer, update_customer
 from utils import save_image, get_timestamp
 
 SESSION_TIMEOUT = 10
 track_name_map = {}
-track_age_map = {}  # NEW: stores estimated age per track
+track_age_map = {}
+track_gender_map = {}  # NEW: store gender for each track
 
 def main():
     model = init_detector()
@@ -49,10 +49,19 @@ def main():
                 else:
                     continue
 
-            if tid not in track_age_map:
-                track_age_map[tid] = estimate_age(crop)
-            age = track_age_map[tid]
-
+            # Estimate age/gender only once per track
+            if tid not in track_age_map or tid not in track_gender_map:
+                result = analyze_face(crop,name)
+                age = result["age"]
+                gender = result["gender"]
+                track_age_map[tid] = age
+                track_gender_map[tid] = gender
+            else:
+                age = track_age_map[tid]
+                gender = track_gender_map[tid]
+            face_data = analyze_face(crop, name)
+            age = face_data["age"]
+            gender = face_data["gender"]
             now = get_timestamp()
             customer = get_customer_by_name(name)
             if not customer:
@@ -65,22 +74,27 @@ def main():
                     "total_time": 0,
                     "min_age": age,
                     "max_age": age,
+                    "gender": gender,
                     "image_path": save_image(crop, name)
                 }
                 add_customer(data)
+                min_age, max_age = age, age
             else:
                 elapsed = (now - customer["last_seen"]).total_seconds()
                 visits = customer["visit_count"] + 1 if elapsed > SESSION_TIMEOUT else customer["visit_count"]
                 total_time = customer["total_time"] + elapsed
+                min_age = min(customer.get("min_age", age), age)
+                max_age = max(customer.get("max_age", age), age)
                 update_customer(name, {
                     "last_seen": now,
                     "visit_count": visits,
                     "total_time": total_time,
-                    "min_age": min(customer.get("min_age", age), age),
-                    "max_age": max(customer.get("max_age", age), age)
+                    "min_age": min_age,
+                    "max_age": max_age,
+                    "gender" : gender
                 })
 
-            label = f"{name} | Age: {customer.get('min_age', age)}-{customer.get('max_age', age)}"
+            label = f"{name} | Age: {min_age}-{max_age} | Gender: {gender}"
             cv2.rectangle(resized, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(resized, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
