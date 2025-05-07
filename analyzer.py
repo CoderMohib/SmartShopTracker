@@ -10,14 +10,13 @@ def analyze_face(face_crop: any, customer_name: str) -> dict:
         # Check if customer data exists
         customer = get_customer_by_name(customer_name)
         if customer:
-            age = customer.get("min_age", -1)
+            min_age = customer.get("min_age", -1)
+            max_age = customer.get("max_age", -1)
             gender_result = customer.get("gender", {})
 
-            # Handle string case
+            # Determine gender from dict or string
             if isinstance(gender_result, str):
                 gender = gender_result
-
-            # Handle dict with confidence scores
             elif isinstance(gender_result, dict) and gender_result:
                 man_score = gender_result.get("Man", 0)
                 woman_score = gender_result.get("Woman", 0)
@@ -26,7 +25,8 @@ def analyze_face(face_crop: any, customer_name: str) -> dict:
                 gender = "Unknown"
 
             return {
-                "age": age,
+                "min_age": min_age,
+                "max_age": max_age,
                 "gender": gender
             }
 
@@ -42,6 +42,10 @@ def analyze_face(face_crop: any, customer_name: str) -> dict:
         if age < 40:
             age = max(0, age - 2)
 
+        # Compute age range
+        min_age = max(0, age - 3)
+        max_age = age + 3
+
         # Determine gender
         if isinstance(gender_result, dict) and gender_result:
             man_score = gender_result.get("Man", 0)
@@ -54,25 +58,25 @@ def analyze_face(face_crop: any, customer_name: str) -> dict:
             gender = "Unknown"
             gender_result = {}
 
-        print("i am analyzer gender", gender)
-
         # Save to DB
         data = {
             "name": customer_name,
-            "min_age": age,
-            "max_age": age,
+            "min_age": min_age,
+            "max_age": max_age,
             "gender": gender_result
         }
         update_customer(customer_name, data)
 
         return {
-            "age": age,
+            "min_age": min_age,
+            "max_age": max_age,
             "gender": gender
         }
 
     except Exception as e:
         print(f"Error during analysis: {e}")
         return {
-            "age": -1,
+            "min_age": -1,
+            "max_age": -1,
             "gender": "Unknown"
         }
