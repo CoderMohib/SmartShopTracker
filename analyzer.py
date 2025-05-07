@@ -31,7 +31,7 @@ def analyze_face(face_crop: any, customer_name: str) -> dict:
             }
 
         # Run analysis if not found in database
-        result = DeepFace.analyze(face_crop, actions=["age", "gender"], enforce_detection=False)
+        result = DeepFace.analyze(face_crop, actions=["age", "gender"], models={"gender": "FairFace", "age": "FairFace"}, enforce_detection=False)
         if isinstance(result, list):
             result = result[0]
 
