@@ -2,6 +2,16 @@ opencv-python
 ultralytics
 deep_sort_realtime
 deepface
-tf-keras          # if you ran into the tf-keras error
+tf-keras                # If needed for compatibility
+tensorflow              # Required by DeepFace
+keras                   # Also required by DeepFace
 pymongo
 numpy
+Pillow                  # For image processing
+matplotlib              # Sometimes used internally by DeepFace
+scipy                   # Used in face recognition or image processing
+torch                   # Required for Ultralytics YOLO
+torchvision             # Also required by Ultralytics
+tqdm                    # Progress bars used in some models
+scikit-learn            # For embedding comparisons (cosine distance etc.)
+imutils                 # Optional but useful for image processing utilities
