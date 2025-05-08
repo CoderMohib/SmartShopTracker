@@ -1,136 +1,100 @@
-import cv2
+import tkinter as tk
+from tkinter import ttk, messagebox
 import threading
-from detector import init_detector, detect_people
-from tracker import init_tracker, update_tracks
-from recognizer import recognize_face, known_embeddings, known_names
-from analyzer import analyze_face
-from database import get_customer_by_name, add_customer, update_customer
-from utils import save_image, get_timestamp
+import cv2
+import sys
+from smartShop import smartShop
+from database import collection
 
-SESSION_TIMEOUT = 10
+stop_event = None
+thread = None
 
-track_name_map = {}
-track_age_map = {}
-track_gender_map = {}
-analyzing_tracks = set()
+def run_tracking():
+    global stop_event
+    smartShop(stop_event)
 
-def analyze_in_background(crop, name, tid):
-    """
-    Function to run age and gender analysis in a background thread.
-    """
-    result = analyze_face(crop, name)
-    min_age = result["min_age"]
-    max_age = result["max_age"]
+def start_live_feed():
+    global thread, stop_event
+    if thread and thread.is_alive():
+        messagebox.showinfo("Info", "Live feed is already running.")
+        return
 
-    gender = result["gender"]
+    stop_event = threading.Event()
+    thread = threading.Thread(target=run_tracking)
+    thread.start()
 
-    # Calculate min_age and max_age
-
-
-    track_age_map[tid] = (min_age, max_age)
-    track_gender_map[tid] = gender
-
-    now = get_timestamp()
-    customer = get_customer_by_name(name)
-    
-    if not customer:
-        # If customer is new, add to the database
-        data = {
-            "name": name,
-            "track_id": tid,
-            "first_seen": now,
-            "last_seen": now,
-            "visit_count": 1,
-            "total_time": 0,
-            "min_age": min_age,
-            "max_age": max_age,
-            "gender": gender,
-            "image_path": save_image(crop, name)
-        }
-        add_customer(data)
+def stop_live_feed(silent=False):
+    global stop_event, thread
+    if thread and thread.is_alive():
+        stop_event.set()
+        thread.join()
+        cv2.destroyAllWindows()
+        if not silent:
+            messagebox.showinfo("Info", "Live feed stopped.")
     else:
-        # Update existing customer with new data
-        elapsed = (now - customer["last_seen"]).total_seconds()
-        visits = customer["visit_count"] + 1 if elapsed > SESSION_TIMEOUT else customer["visit_count"]
-        total_time = customer["total_time"] + elapsed
-        min_age = min(customer.get("min_age", min_age), min_age)
-        max_age = max(customer.get("max_age", max_age), max_age)
-        update_customer(name, {
-            "last_seen": now,
-            "visit_count": visits,
-            "total_time": total_time,
-            "min_age": min_age,
-            "max_age": max_age,
-            "gender": gender
-        })
+        if not silent:
+            messagebox.showinfo("Info", "Live feed is not running.")
 
-    # Mark this track as analyzed
-    analyzing_tracks.discard(tid)
+def show_customers():
+    customers = list(collection.find({}))
+    if not customers:
+        messagebox.showinfo("Info", "No customers found.")
+        return
 
-def main():
-    """
-    Main function to run the SmartShop Tracker.
-    """
-    model = init_detector()
-    tracker = init_tracker()
-    cap = cv2.VideoCapture(1)  # External camera on index 1
+    win = tk.Toplevel()
+    win.title("Stored Customers")
 
-    print("[INFO] Starting SmartShop Tracker. Press 'q' to exit.")
+    cols = ["Name", "Age Range", "Gender", "Visits", "Last Seen"]
+    tree = ttk.Treeview(win, columns=cols, show='headings')
+    for col in cols:
+        tree.heading(col, text=col)
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    for cust in customers:
+        name = cust.get("name", "Unknown")
+        age_range = f"{cust.get('min_age', '?')} - {cust.get('max_age', '?')}"
+        gender = cust.get("gender", "Unknown") if isinstance(cust.get("gender"), str) else "Unknown"
+        visits = cust.get("visit_count", 0)
+        last_seen = cust.get("last_seen", "N/A")
+        tree.insert('', 'end', values=(name, age_range, gender, visits, last_seen))
 
-        boxes, scores, resized = detect_people(model, frame)
-        tracks = update_tracks(tracker, boxes, scores, resized)
+    tree.pack(expand=True, fill='both')
 
-        for track in tracks:
-            tid = track.track_id
-            x1, y1, x2, y2 = map(int, track.to_ltrb())
-            h, w, _ = resized.shape
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(w, x2), min(h, y2)
-            if x2 <= x1 or y2 <= y1:
-                continue
+    # Add scrollbar
+    scrollbar = ttk.Scrollbar(win, orient='vertical', command=tree.yview)
+    tree.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side='right', fill='y')
 
-            crop = resized[y1:y2, x1:x2]
-            name, emb, face_found = recognize_face(crop)
+def quit_app():
+    stop_live_feed(silent=True)
+    sys.exit()
 
-            if tid in track_name_map:
-                name = track_name_map[tid]
-            else:
-                if face_found and emb is not None:
-                    if name is None:
-                        name = f"Person_{len(known_names) + 1}"
-                    known_names.append(name)
-                    known_embeddings.append(emb)
-                    track_name_map[tid] = name
-                else:
-                    continue
+def on_close():
+    stop_live_feed(silent=True)
+    root.destroy()
 
-            # Run background analysis if not already done
-            if tid not in track_age_map or tid not in track_gender_map:
-                if tid not in analyzing_tracks:
-                    analyzing_tracks.add(tid)
-                    threading.Thread(target=analyze_in_background, args=(crop, name, tid)).start()
+def build_gui():
+    global root
+    root = tk.Tk()
+    root.title("SmartShop Tracker")
+    root.geometry("400x250")
 
-            # Retrieve age range and gender, or show "Processing..." if still analyzing
-            age_range = track_age_map.get(tid, ("Processing...", "Processing..."))
-            gender = track_gender_map.get(tid, "Processing...")
+    title = tk.Label(root, text="SmartShop Tracker", font=("Helvetica", 16, "bold"))
+    title.pack(pady=10)
 
-            # Update the label to show name, age range, and gender
-            label = f"{name} | Age: {age_range[0]} - {age_range[1]} | Gender: {gender}"
-            cv2.rectangle(resized, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(resized, label, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    start_btn = tk.Button(root, text="Start Live Feed", command=start_live_feed, width=20, bg="green", fg="white")
+    start_btn.pack(pady=5)
 
-        cv2.imshow("SmartShop Tracker", resized)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    stop_btn = tk.Button(root, text="Stop Live Feed", command=stop_live_feed, width=20, bg="red", fg="white")
+    stop_btn.pack(pady=5)
 
-    cap.release()
-    cv2.destroyAllWindows()
+    show_btn = tk.Button(root, text="Show Stored Customers", command=show_customers, width=25)
+    show_btn.pack(pady=10)
+
+    exit_btn = tk.Button(root, text="Exit", command=quit_app, width=20)
+    exit_btn.pack(pady=5)
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    root.mainloop()
 
 if __name__ == "__main__":
-    main()
+    build_gui()
